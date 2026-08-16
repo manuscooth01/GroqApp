@@ -201,10 +201,7 @@ fun MainApp(viewModel: ZaiViewModel = viewModel()) {
         )
     }
 
-    // NUEVO: Flujo de onboarding integrado - solo muestra una vez si no completado
-    val onboardingDone by viewModel.onboardingCompleted.collectAsStateWithLifecycle()
-    var showOnboarding by remember(onboardingDone) { mutableStateOf(!onboardingDone) }
-
+    // Usamos las variables de onboarding ya definidas en líneas 133-134
     if (!onboardingDone) {
         WelcomeScreen(
             viewModel = viewModel,
