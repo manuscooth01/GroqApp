@@ -201,12 +201,25 @@ fun MainApp(viewModel: ZaiViewModel = viewModel()) {
         )
     }
 
-    if (showOnboarding) {
-        OnboardingScreen(
+    // NUEVO: Flujo de onboarding integrado - solo muestra una vez si no completado
+    val onboardingDone by viewModel.onboardingCompleted.collectAsStateWithLifecycle()
+    var showOnboarding by remember(onboardingDone) { mutableStateOf(!onboardingDone) }
+
+    if (!onboardingDone) {
+        WelcomeScreen(
             viewModel = viewModel,
+            onChoiceSelected = { provider ->
+                // Ejecutar login según elección y completar onboarding después
+                val activity = remember { this } as? Activity
+                viewModel.setOnboardingProvider(provider, activity)
+                // Note: completeOnboarding se llama después dentro del flow login
+                // o podemos llamarlo aquí después de un delay si el login fue exitoso
+                // Por ahora, marcamos que intentamos y pasamos a verificar estado
+                showOnboarding = viewModel.onboardingCompleted.value
+            },
             onFinish = {
-                showOnboarding = false
-                viewModel.openSettings()
+                // Usuario apretó "No, gracias" - salir de la app
+                finish()
             }
         )
     } else {
@@ -1334,8 +1347,518 @@ fun OnboardingScreen(viewModel: ZaiViewModel, onFinish: () -> Unit) {
                                                         showModelDropdown = false
                                                     }
                                                 )
-                                            }
-                                        }
+}
+}
+
+// ═══════════════════════════════════════════
+// WELCOME / ONBOARDING SCREEN - ENHANCED TUTORIAL
+// ═══════════════════════════════════════════
+@Composable
+fun WelcomeScreen(
+    viewModel: ZaiViewModel,
+    onChoiceSelected: (String) -> Unit,
+    onFinish: () -> Unit
+) {
+    val onboardingProvider by viewModel.onboardingProvider.collectAsStateWithLifecycle()
+    val onboardingStep by viewModel.onboardingStep.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val isAccessibilityFocused = LocalAccessibilityFocusState.current
+
+    when (onboardingStep) {
+        0 -> {
+            // Step 1: Bienvenida interactiva - tutorial paso a paso
+            Column(
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(16.dp)
+            ) {
+                // Logo grande y destacado
+                Box(
+                    modifier = Modifier
+                        .size(120.dp)
+                        .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(16.dp))
+                        .shadow(MaterialTheme.shadows.elevated)
+                ) {
+                    Image(
+                        painter = painterResource(R.drawable.app_logo),
+                        contentDescription = "Logo de GroqApp",
+                        modifier = Modifier.size(100.dp).padding(10.dp)
+                    )
+                }
+                Text(
+                    "Bienvenido a GroqApp",
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    "Tu asistente de IA personal",
+                    fontSize = 16.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(Modifier.height(24.dp))
+
+                // Texto de bienvenida adaptativo
+    welcomeText = when (isAccessibilityFocused) {
+        "Bienvenido. GroqApp es tu asistente de IA. Usa pestañas para chatear o acceder a agentes." -> "Bienvenido. GroqApp es tu asistente de IA. Usa las pestañas inferiores para chatear o acceder a agentes."
+    }
+                Text(
+                    welcomeText,
+                    fontSize = 15.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(Modifier.height(24.dp))
+
+                // Misión / propósito
+                Text(
+                    "¿Qué te gustaría hacer hoy?",
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(Modifier.height(32.dp))
+
+                // Opciones de acceso - tarjetas grandes y táctiles
+                // Botón Google - card style
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(4.dp)
+                        .background(
+                            if (onboardingProvider == "google") {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.surface
+                            },
+                            RoundedCornerShape(12.dp)
+                        )
+                        .clickable {
+                            onChoiceSelected("google")
+                        }
+                        .pointerInput(Unit) {
+                            detectTapGestures { click ->
+                                if (click) onChoiceSelected("google")
+                            }
+                        }
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Image(
+                            Icons.Default.Google,
+                            contentDescription = "Continuar con Google",
+                            tint = if (onboardingProvider == "google") {
+                                Color(0xFFFFFFFF)
+                            } else {
+                                Color(0xFFDB4437)
+                            },
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            "Continuar con Google",
+                            fontWeight = onboardingProvider == "google" ? FontWeight.Bold : FontWeight.Normal,
+                            fontSize = 17.sp,
+                            color = if (onboardingProvider == "google") {
+                                Color(0xFFFFFFFF)
+                            } else {
+                                Color(0xFFDB4437)
+                            }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+
+                // Botón GitHub - card style
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(4.dp)
+                        .background(
+                            if (onboardingProvider == "github") {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.surface
+                            },
+                            RoundedCornerShape(12.dp)
+                        )
+                        .clickable {
+                            onChoiceSelected("github")
+                        }
+                        .pointerInput(Unit) {
+                            detectTapGestures { click ->
+                                if (click) onChoiceSelected("github")
+                            }
+                        }
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            Icons.Default.GitHub,
+                            contentDescription = "Continuar con GitHub",
+                            tint = if (onboardingProvider == "github") {
+                                Color(0xFFFFFFFF)
+                            } else {
+                                Color(0xFF333333)
+                            },
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            "Continuar con GitHub",
+                            fontWeight = onboardingProvider == "github" ? FontWeight.Bold : FontWeight.Normal,
+                            fontSize = 17.sp,
+                            color = if (onboardingProvider == "github") {
+                                Color(0xFFFFFFFF)
+                            } else {
+                                Color(0xFF333333)
+                            }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+
+                // Botón Correo/Email - card style
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(4.dp)
+                        .background(
+                            if (onboardingProvider == "email") {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.surface
+                            },
+                            RoundedCornerShape(12.dp)
+                        )
+                        .clickable {
+                            onChoiceSelected("email")
+                        }
+                        .pointerInput(Unit) {
+                            detectTapGestures { click ->
+                                if (click) onChoiceSelected("email")
+                            }
+                        }
+                ) {
+                    Row(
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Icon(
+                            Icons.Default.Email,
+                            contentDescription = "Registrarse con correo",
+                            tint = if (onboardingProvider == "email") {
+                                Color(0xFFFFFFFF)
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            },
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            "Registrarse con correo",
+                            fontWeight = onboardingProvider == "email" ? FontWeight.Bold : FontWeight.Normal,
+                            fontSize = 17.sp,
+                            color = if (onboardingProvider == "email") {
+                                Color(0xFFFFFFFF)
+                            } else {
+                                MaterialTheme.colorScheme.primary
+                            }
+                        )
+                    }
+                }
+                Spacer(Modifier.height(32.dp))
+
+                // Información de accesibilidad
+                if (!isAccessibilityFocused) {
+                    Text(
+                    "Consejo: Este tutorial tiene alto contraste y grandes botones para facilitar su uso.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+                } else {
+                    Text(
+                    "Modo accesibilidad activado: todos los elementos tienen enfoque táctil y alto contraste.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                    )
+                }
+                Spacer(modifier = Modifier.height(40.dp))
+
+                // Botón de salir
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(4.dp)
+                        .background(
+                            MaterialTheme.colorScheme.onSurface,
+                            RoundedCornerShape(12.dp)
+                        )
+                        .clickable {
+                            onFinish()
+                        }
+                        .pointerInput(Unit) {
+                            detectTapGestures { click ->
+                                if (click) onFinish()
+                            }
+                        }
+                ) {
+                    Text(
+                        "No, gracias",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+        1 -> {
+            // Step 2: Indicador de qué login se está haciendo / en proceso
+            Column(
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(16.dp)
+            ) {
+                Text(
+                    "Iniciando sesión...",
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    textAlign = TextAlign.Center
+                )
+                val authLoading by viewModel.authLoading.collectAsStateWithLifecycle()
+                if (authLoading.value) {
+                    CircularProgressIndicator(
+                        alignment = Alignment.CenterHorizontal,
+                        modifier = Modifier.size(48.dp)
+                    )
+                }
+                Spacer(Modifier.height(24.dp))
+                Text(
+                    "Selecciona una opción arriba para continuar con tu método de acceso preferido.",
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+                // Leyenda de pasos
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    "Paso 1 de 3: Seleccionar proveedor de IA",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+        2 -> {
+            // Step 3: Tutorial de características principales
+            tutorialStep3(context, onboardingProvider, viewModel, onChoiceSelected, onFinish)
+        }
+        else -> {
+            // Step 4 o estado posterior: verificar si ya completó onboarding
+            LaunchedEffect(key1 = onboardingProvider, key2 = onboardingStep) {
+                delay(800)
+            }
+            onFinish()
+        }
+    }
+}
+
+// -------------------------------------------------------
+// PASO 3: TUTORIAL DE CARACTERÍSTICAS PRINCIPALES
+// -------------------------------------------------------
+@Composable
+fun tutorialStep3(
+    context: Context,
+    onboardingProvider: String,
+    viewModel: ZaiViewModel,
+    onChoiceSelected: (String) -> Unit,
+    onFinish: () -> Unit
+) {
+    val selectedModel by viewModel.selectedModel.collectAsState()
+    Column(
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.padding(16.dp)
+    ) {
+        Text(
+            "Explora las características principales",
+            fontSize = 22.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary,
+            textAlign = TextAlign.Center
+        )
+        Spacer(Modifier.height(24.dp))
+
+        // Tarjeta: Chat
+        featureCard(
+            icon = Icons.Chat,
+            title = "Chatear",
+            description = "Conversaciones fluidas con IA. Escribe tus preguntas y recibe respuestas en tiempo real.",
+            onClick = { onChoiceSelected("") } // placeholder
+        )
+        Spacer(Modifier.height(16.dp))
+
+        // Tarjeta: Agente
+        featureCard(
+            icon = Icons.Favorite,
+            title = "Agente",
+            description = "Asistentes especializados para tareas específicas. Obtén ayuda experta en diversos temas.",
+            onClick = { onChoiceSelected("") } // placeholder
+        )
+        Spacer(Modifier.height(16.dp))
+
+        // Tarjeta: Herramientas
+        featureCard(
+            icon = Icons.DeviceHub,
+            title = "Herramientas",
+            description = "Caja de herramientas con utilidades para cálculo, código y más.",
+            onClick = { onChoiceSelected("") } // placeholder
+        )
+        Spacer(Modifier.height(32.dp))
+
+        // Selector de modelo (solo si ya tiene uno seleccionado o mostrar instrucción)
+        if (selectedModel.isNotBlank()) {
+            Text(
+                "Modelo actual: $selectedModel",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Center
+            )
+        } else {
+            Text(
+                "Primero selecciona cómo acceder (Google, GitHub o correo) para desbloquear modelos.",
+                fontSize = 14.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+        }
+        Spacer(Modifier.height(24.dp))
+
+        // Nota sobre proveedores
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp)
+                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+        ) {
+            Text(
+                "Soporte de proveedores: Groq (rápido), OpenAI, OpenRouter, Together, Ollama (local).",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+        }
+        Spacer(Modifier.height(32.dp))
+
+        // Botón finalizar
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(4.dp)
+                .background(
+                    MaterialTheme.colorScheme.primary,
+                    RoundedCornerShape(12.dp)
+                )
+                .clickable {
+                    onFinish()
+                }
+                .pointerInput(Unit) {
+                    detectTapGestures { click ->
+                        if (click) onFinish()
+                    }
+                }
+        ) {
+            Text(
+                "Comenzar",
+                fontWeight = FontWeight.Bold,
+                fontSize = 17.sp,
+                color = Color.White
+            )
+        }
+    }
+}
+
+// -------------------------------------------------------
+// COMPOSABLE DE TARJETA DE CARACTERÍSTICA - DISEÑO ACCESIBLE
+// -------------------------------------------------------
+@Composable
+fun featureCard(
+    icon: IconPainter,
+    title: String,
+    description: String,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(4.dp)
+            .background(
+                MaterialTheme.colorScheme.surface,
+                RoundedCornerShape(16.dp)
+            )
+            .clickable(onClick)
+            .pointerInput(Unit) {
+                detectTapGestures { click ->
+                    if (click) onClick()
+                }
+            }
+            .semantics { this.isFocusable(); this.isClickable() }
+    ) {
+        Row(
+            verticalAlignment = Alignment.Center,
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            // Icono a la izquierda
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .background(MaterialTheme.colorScheme.primaryContainer, RoundedCornerShape(12.dp))
+            ) {
+                Icon(icon, contentDescription = title, tint = MaterialTheme.colorScheme.primary)
+            }
+            // Texto a la derecha
+            Column(
+                verticalArrangement = Arrangement.Center,
+                modifier = Modifier.weight(1f),
+                horizontalAlignment = Alignment.Start
+            ) {
+                Text(
+                    title,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.W500,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    overflow = TextOverflow.Ellipsis,
+                    maxLines = 2
+                )
+                Text(
+                    description,
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    overflow = TextOverflow.Ellipsis,
+                    maxLines = 2
+                )
+            }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════
+// END WELCOME SCREEN INTEGRATED
+// ═══════════════════════════════════════════
                                     }
                                 } else {
                                     OutlinedTextField(
@@ -1463,6 +1986,15 @@ fun OnboardingScreen(viewModel: ZaiViewModel, onFinish: () -> Unit) {
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp)
                         )
+                        if (isRegisterMode) {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Mínimo 8 caracteres, una mayúscula, una minúscula, un número y un símbolo (@\$!%*?&)",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                modifier = Modifier.align(Alignment.Start)
+                            )
+                        }
                     }
                     Spacer(Modifier.height(8.dp))
                     if (!isRegisterMode && !isForgotPasswordMode) {

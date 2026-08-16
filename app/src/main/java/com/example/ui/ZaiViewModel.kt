@@ -53,6 +53,24 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import android.util.Patterns
+
+// Validación de email y contraseña robusta
+private fun isValidEmail(email: String): Boolean {
+    return Patterns.EMAIL_ADDRESS.matcher(email).matches()
+}
+
+private fun isStrongPassword(password: String): Boolean {
+    return password.length >= 8 &&
+        Regex("(?=.*[A-Z])").matches(password) &&
+        Regex("(?=.*[a-z])").matches(password) &&
+        Regex("(?=.*\\d)").matches(password) &&
+        Regex("(?=.*[@$!%*?&])").matches(password)
+}
+
+private fun getPasswordRequirements(): String {
+    return "Mínimo 8 caracteres, una mayúscula, una minúscula, un número y un símbolo (@\$!%*?&)"
+}
 
 // @Immutable: todos sus campos son val y el objeto no cambia tras crearse. Sin esto,
 // Compose la infiere como inestable (por el campo Uri) y no garantiza saltar la
@@ -222,6 +240,67 @@ class ZaiViewModel(application: Application) : AndroidViewModel(application), Te
         _onboardingCompleted.value = true
         _showSettings.value = true
         logAction("Onboarding", "Onboarding completado.")
+    }
+
+    // Nuevo: completar onboarding con proveedor y key elegidos
+    fun completeOnboarding(provider: String = "Groq", apiKey: String = "") {
+        // Guardar proveedor elegido
+        _onboardingProvider.value = provider
+        prefs.edit().putString("onboarding_provider", provider).apply()
+
+        // Guardar API key solo si el proveedor la necesita (no para Ollama)
+        if (provider != "Ollama" && apiKey.isNotBlank()) {
+            saveApiKey(apiKey)
+        } else if (provider != "Ollama" && apiKey.isBlank()) {
+            // Si viene en blanco para proveedor que sí necesita, avisar pero no tumbar
+            logAction("Onboarding", "API key vacía para proveedor $provider, usando vacío placeholder")
+        }
+
+        // Marcar onboarding como completado
+        prefs.edit().putBoolean("onboarding_done", true).apply()
+        _onboardingCompleted.value = true
+        _onboardingStep.value = 3 // step final
+        _onboardingStep.value = 0 // reset para futuro uso
+        logAction("Onboarding", "Onboarding completado - proveedor: $provider")
+    }
+
+    /**
+     * Establece el proveedor elegido en onboarding y lanza el flujo de login correspondiente.
+     * Este method es llamado desde MainActivity.WelcomeScreen cuando el usuario presiona un botón.
+     */
+    fun setOnboardingProvider(provider: String, activity: Activity?) {
+        _onboardingProvider.value = provider
+        _onboardingStep.value = 1 // avanzar al step "login en proceso"
+
+        when (provider) {
+            "google" -> {
+                // Lanzar Google Sign-In si tenemos activity context
+                activity?.let {
+                    signInWithGoogle(it)
+                } else {
+                    _apiError.value = "Se requiere un contexto de Activity para iniciar sesión con Google."
+                    _onboardingStep.value = 0 // reset si falla
+                }
+            }
+            "github" -> {
+                activity?.let {
+                    signInWithGitHub(it)
+                } ?: run {
+                    _apiError.value = "Se requiere un contexto de Activity para iniciar sesión con GitHub."
+                    _onboardingStep.value = 0
+                }
+            }
+            "email" -> {
+                // Para email, podemos mostrar un dialog o navegar a screen de registro/login
+                // Aquí simplemente marcamos el step y dejamos que MainAction maneje el dialog
+                _onboardingStep.value = 2 // step de "configuración de email"
+                logAction("Onboarding", "Flujo de email seleccionado - abrir dialog en MainActivity")
+            }
+            else -> {
+                _apiError.value = "Proveedor de onboarding no reconocido: $provider"
+                _onboardingStep.value = 0
+            }
+        }
     }
 
     fun resetOnboarding() {
@@ -929,6 +1008,37 @@ class ZaiViewModel(application: Application) : AndroidViewModel(application), Te
     // si no hay ninguno en curso. Permite mostrar el spinner solo en el botón pulsado.
     private val _authProvider = MutableStateFlow<String?>(null)
     val authProvider: StateFlow<String?> = _authProvider.asStateFlow()
+
+    // Rate limiting para prevenir fuerza bruta en login/registro por email
+    private var failedAuthAttempts = 0
+    private var lastFailedAuthTime = 0L
+    private val MAX_FAILED_ATTEMPTS = 5
+    private val LOCKOUT_DURATION_MS = 15 * 60 * 1000 // 15 minutos
+
+    private fun checkRateLimit(): Boolean {
+        val now = System.currentTimeMillis()
+        if (failedAuthAttempts >= MAX_FAILED_ATTEMPTS) {
+            if (now - lastFailedAuthTime < LOCKOUT_DURATION_MS) {
+                val remainingMinutes = ((LOCKOUT_DURATION_MS - (now - lastFailedAuthTime)) / 60000) + 1
+                _apiError.value = "Demasiados intentos fallidos. Intenta de nuevo en $remainingMinutes minutos."
+                return false
+            } else {
+                // Resetear contador tras el bloqueo
+                failedAuthAttempts = 0
+            }
+        }
+        return true
+    }
+
+    private fun recordFailedAuth() {
+        failedAuthAttempts++
+        lastFailedAuthTime = System.currentTimeMillis()
+    }
+
+    private fun resetFailedAuth() {
+        failedAuthAttempts = 0
+        lastFailedAuthTime = 0
+    }
     val apiError: StateFlow<String?> = _apiError.asStateFlow()
     private val _loadingMessage = MutableStateFlow("")
     val loadingMessage: StateFlow<String> = _loadingMessage.asStateFlow()
@@ -1641,19 +1751,31 @@ class ZaiViewModel(application: Application) : AndroidViewModel(application), Te
      * Inicia sesión real con correo y contraseña usando Firebase Auth.
      */
     fun signInWithEmail(email: String, password: String) {
+        if (!checkRateLimit()) return
         if (email.isBlank() || password.isBlank()) {
             _apiError.value = "Ingresa correo y contraseña."
+            return
+        }
+        if (!isValidEmail(email)) {
+            _apiError.value = "Formato de correo inválido."
             return
         }
         _authLoading.value = true
         FirebaseAuth.getInstance().signInWithEmailAndPassword(email, password)
             .addOnSuccessListener { authResult ->
                 _authLoading.value = false
-                completeLogin(authResult.user?.email ?: email)
+                resetFailedAuth()
+                val user = authResult.user
+                if (user != null && !user.isEmailVerified) {
+                    user.sendEmailVerification()
+                        .addOnFailureListener { _ -> }
+                }
+                completeLogin(user?.email ?: email)
             }
             .addOnFailureListener { e ->
                 _authLoading.value = false
-                _apiError.value = "No se pudo iniciar sesión: ${e.message}"
+                recordFailedAuth()
+                _apiError.value = sanitizeAuthError(e.message)
             }
     }
 
@@ -1661,19 +1783,32 @@ class ZaiViewModel(application: Application) : AndroidViewModel(application), Te
      * Crea una cuenta nueva con correo y contraseña usando Firebase Auth.
      */
     fun registerWithEmail(email: String, password: String) {
-        if (email.isBlank() || password.length < 6) {
-            _apiError.value = "La contraseña debe tener al menos 6 caracteres."
+        if (email.isBlank()) {
+            _apiError.value = "Ingresa un correo electrónico."
             return
         }
+        if (!isValidEmail(email)) {
+            _apiError.value = "Formato de correo inválido."
+            return
+        }
+        if (!isStrongPassword(password)) {
+            _apiError.value = "Contraseña débil. ${getPasswordRequirements()}"
+            return
+        }
+        if (!checkRateLimit()) return
         _authLoading.value = true
         FirebaseAuth.getInstance().createUserWithEmailAndPassword(email, password)
             .addOnSuccessListener { authResult ->
                 _authLoading.value = false
+                resetFailedAuth()
+                authResult.user?.sendEmailVerification()
+                    .addOnFailureListener { _ -> }
                 completeLogin(authResult.user?.email ?: email)
             }
             .addOnFailureListener { e ->
                 _authLoading.value = false
-                _apiError.value = "No se pudo crear la cuenta: ${e.message}"
+                recordFailedAuth()
+                _apiError.value = sanitizeAuthError(e.message)
             }
     }
 
@@ -1685,6 +1820,10 @@ class ZaiViewModel(application: Application) : AndroidViewModel(application), Te
             _apiError.value = "Ingresa tu correo para recuperar la contraseña."
             return
         }
+        if (!isValidEmail(email)) {
+            _apiError.value = "Formato de correo inválido."
+            return
+        }
         _authLoading.value = true
         FirebaseAuth.getInstance().sendPasswordResetEmail(email)
             .addOnSuccessListener {
@@ -1693,8 +1832,27 @@ class ZaiViewModel(application: Application) : AndroidViewModel(application), Te
             }
             .addOnFailureListener { e ->
                 _authLoading.value = false
-                _apiError.value = "No se pudo enviar el correo de recuperación: ${e.message}"
+                _apiError.value = sanitizeAuthError(e.message)
             }
+    }
+
+    /**
+     * Mapea errores internos de Firebase a mensajes genéricos seguros para el usuario.
+     * Evita information disclosure (detalles de implementación, códigos de error internos).
+     */
+    private fun sanitizeAuthError(message: String?): String {
+        val msg = message?.lowercase() ?: ""
+        return when {
+            msg.contains("invalid") && msg.contains("email") -> "Correo electrónico inválido."
+            msg.contains("user not found") || msg.contains("no user record") -> "No existe una cuenta con este correo."
+            msg.contains("wrong password") || msg.contains("invalid credential") -> "Contraseña incorrecta."
+            msg.contains("email already in use") || msg.contains("already exists") -> "Ya existe una cuenta con este correo."
+            msg.contains("weak password") -> "Contraseña débil. ${getPasswordRequirements()}"
+            msg.contains("network") || msg.contains("connection") -> "Error de conexión. Verifica tu internet."
+            msg.contains("too many requests") -> "Demasiados intentos. Intenta más tarde."
+            msg.contains("operation not allowed") -> "Inicio de sesión con correo no habilitado. Contacta al administrador."
+            else -> "Error de autenticación. Intenta de nuevo."
+        }
     }
 
     fun logout() {
@@ -1938,6 +2096,13 @@ class ZaiViewModel(application: Application) : AndroidViewModel(application), Te
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     private val _currentUserEmail = MutableStateFlow(prefs.getString("current_user_email", "usuario@groqapp.local") ?: "usuario@groqapp.local")
     val currentUserEmail: StateFlow<String> = _currentUserEmail.asStateFlow()
+
+    // States de Onboarding (nuevos)
+    private val _onboardingProvider = MutableStateFlow("") // "google" | "github" | "email"
+    val onboardingProvider: StateFlow<String> = _onboardingProvider.asStateFlow()
+
+    private val _onboardingStep = MutableStateFlow(0) // 0=intro, 1=selector, 2=login-proceso, 3=completado
+    val onboardingStep: StateFlow<Int> = _onboardingStep.asStateFlow()
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val chatSessions: StateFlow<List<ChatSession>> = _currentUserEmail.flatMapLatest { email ->
